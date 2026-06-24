@@ -1,0 +1,21 @@
+export const money  = n => '$' + Number(n || 0).toFixed(2);
+export const money0 = n => '$' + Math.round(Number(n || 0));
+export const isLow  = it => it.qty <= it.reorder_at;
+
+export const monthKey = ts => {
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+};
+export const monthLabel = k => {
+  const p = k.split('-');
+  return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+export const monthShort = k => {
+  const p = k.split('-');
+  return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+};
+export function availableMonths(log) {
+  const s = new Set(log.map(e => monthKey(e.ts)));
+  s.add(monthKey(Date.now()));
+  return [...s].sort().reverse();
+}
