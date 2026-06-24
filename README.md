@@ -80,6 +80,36 @@ on-hand count by hand is treated as a true-up and isn't counted as spending.
 
 ---
 
+## If you already deployed before pack pricing
+
+The items table gained two columns: `pack_price` and `pack_size`. Run this once
+in the Supabase SQL Editor on your existing project (it's also at the bottom of
+`supabase/schema.sql`, commented out):
+
+```sql
+alter table items add column if not exists pack_price numeric(10,2) default 0;
+alter table items add column if not exists pack_size int default 1;
+update items set pack_price = price, pack_size = 1 where pack_price = 0 and price > 0;
+```
+
+Then redeploy on Vercel so the app picks up the new fields. Existing items keep
+working exactly as before (pack size of 1 means "sold individually").
+
+## Buying in packs (8-pack of sponges, 4-pack of cleaner, etc.)
+
+When adding or restocking an item, enter the **pack price** exactly as it rings
+up — what the whole 8-pack actually cost — and **units per pack**. The app
+divides for you and tracks everything else in individual units:
+
+- **On hand** is always individual units (8, not "1 pack").
+- **Take** removes individual units, and you can bump the stepper up if you
+  grab more than one at a time (e.g. 3 sponges for one job).
+- **Reports** use the true per-unit cost, so a $19.99 8-pack shows as $2.50/unit
+  everywhere it matters.
+
+For anything sold as a single item, just leave units per pack at 1 — nothing
+changes for those.
+
 ## Notes
 
 - **Barcode lookup** uses Open Products Facts, then Open Food Facts as a backstop —

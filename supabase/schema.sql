@@ -7,12 +7,20 @@ create table if not exists items (
   name        text not null,
   size        text default '',
   vendor      text default '',
-  price       numeric(10,2) default 0,
+  price       numeric(10,2) default 0,   -- price PER INDIVIDUAL UNIT (pack_price / pack_size), used everywhere in reports
+  pack_price  numeric(10,2) default 0,   -- what you actually paid for the whole pack, as it rings up
+  pack_size   int default 1,             -- units per pack (8 for an 8-pack of sponges, 1 for a single bottle)
   upc         text default '',
-  qty         int default 0,
+  qty         int default 0,             -- always in INDIVIDUAL units, not packs
   reorder_at  int default 0,
   created_at  timestamptz default now()
 );
+
+-- If you already ran the original schema before pack pricing existed, run this
+-- once to add the new columns without losing your data:
+-- alter table items add column if not exists pack_price numeric(10,2) default 0;
+-- alter table items add column if not exists pack_size int default 1;
+-- update items set pack_price = price, pack_size = 1 where pack_price = 0 and price > 0;
 
 create table if not exists supply_log (
   id          uuid primary key default gen_random_uuid(),

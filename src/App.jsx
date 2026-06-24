@@ -3,11 +3,11 @@ import { supabase } from './supabaseClient';
 import { fetchAll, addItem, updateItem, deleteItem, addLog, subscribe } from './lib/api';
 import { lookupBarcode } from './lib/lookup';
 import { computeReport } from './lib/reports';
-import { money, money0, isLow, monthKey, monthLabel, monthShort, availableMonths } from './lib/util';
+import { money, money0, isLow, monthKey, monthLabel, monthShort, availableMonths, unitPrice } from './lib/util';
 import Scanner from './components/Scanner';
 import Login from './components/Login';
 
-const blankAdd = { upc: '', name: '', size: '', vendor: '', price: '', qty: '', reorder_at: '' };
+const blankAdd = { upc: '', name: '', size: '', vendor: '', packPrice: '', packSize: '1', qty: '', reorder_at: '' };
 
 export default function App() {
   const [session, setSession] = useState(undefined);
@@ -22,6 +22,7 @@ export default function App() {
   const [camNote, setCamNote] = useState({ use: '', add: '' });
   const [manualUpc, setManualUpc] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(null);
+  const [takeAmounts, setTakeAmounts] = useState({}); // itemId -> chosen take quantity, default 1
   const toastTimer = useRef(null);
 
   /* ---- auth ---- */
@@ -51,31 +52,42 @@ export default function App() {
   }
 
   /* ---- actions ---- */
-  async function takeItem(it) {
+  function getTakeAmt(id) { return takeAmounts[id] || 1; }
+  function setTakeAmt(id, n) { setTakeAmounts(a => ({ ...a, [id]: Math.max(1, n) })); }
+
+  async function takeItem(it, n) {
+    const amt = Math.max(1, parseInt(n) || 1);
     if (it.qty <= 0) { showToast('That one is already at zero.'); return; }
-    const left = it.qty - 1;
+    const used = Math.min(amt, it.qty);
+    const left = it.qty - used;
     await updateItem(it.id, { qty: left });
-    await addLog({ type: 'use', item_id: it.id, name: it.name, units: 1, unit_price: it.price, amount: Number(it.price) });
+    await addLog({ type: 'use', item_id: it.id, name: it.name, units: used, unit_price: it.price, amount: +(used * it.price).toFixed(2) });
     await loadAll();
+    setTakeAmounts(a => ({ ...a, [it.id]: 1 }));
     const nowLow = left <= it.reorder_at;
-    showToast(nowLow ? `Used 1 — ${it.name} is down to ${left}. Added to reorder.` : `Used 1 — ${it.name}, ${left} left.`, nowLow);
+    const usedNote = used < amt ? ` (only ${used} were left)` : '';
+    showToast(nowLow ? `Used ${used}${usedNote} — ${it.name} is down to ${left}. Added to reorder.` : `Used ${used}${usedNote} — ${it.name}, ${left} left.`, nowLow);
   }
 
-  async function restock(it, amt) {
-    await updateItem(it.id, { qty: it.qty + amt });
-    await addLog({ type: 'purchase', item_id: it.id, name: it.name, units: amt, unit_price: it.price, amount: +(amt * it.price).toFixed(2) });
+  async function restock(it, packsOrUnits) {
+    await updateItem(it.id, { qty: it.qty + packsOrUnits });
+    await addLog({ type: 'purchase', item_id: it.id, name: it.name, units: packsOrUnits, unit_price: it.price, amount: +(packsOrUnits * it.price).toFixed(2) });
     await loadAll();
-    setEditing(e => (e && e.id === it.id ? { ...e, qty: it.qty + amt } : e));
-    showToast(`Restocked ${it.name} — ${it.qty + amt} on hand.`);
+    setEditing(e => (e && e.id === it.id ? { ...e, qty: it.qty + packsOrUnits } : e));
+    showToast(`Restocked ${it.name} — ${it.qty + packsOrUnits} on hand.`);
   }
 
   async function saveEdit() {
     const e = editing;
+    const packPrice = parseFloat(e.packPrice) || 0;
+    const packSize = Math.max(1, parseInt(e.packSize) || 1);
     const patch = {
       name: e.name.trim() || 'Untitled',
       size: e.size.trim(),
       vendor: e.vendor.trim(),
-      price: parseFloat(e.price) || 0,
+      pack_price: packPrice,
+      pack_size: packSize,
+      price: unitPrice(packPrice, packSize),
       qty: parseInt(e.qty) || 0,
       reorder_at: parseInt(e.reorder_at) || 0,
       upc: (e.upc || '').trim(),
@@ -96,32 +108,37 @@ export default function App() {
   async function addNewItem() {
     const name = add.name.trim();
     if (!name) { showToast('Give it a name first.'); return; }
-    const price = parseFloat(add.price) || 0;
-    const qty = parseInt(add.qty) || 0;
+    const packPrice = parseFloat(add.packPrice) || 0;
+    const packSize = Math.max(1, parseInt(add.packSize) || 1);
+    const packsOnHand = parseInt(add.qty) || 0;
+    const price = unitPrice(packPrice, packSize);
+    const unitsOnHand = packsOnHand * packSize;
     const created = await addItem({
       name,
       size: add.size.trim(),
       vendor: add.vendor.trim(),
+      pack_price: packPrice,
+      pack_size: packSize,
       price,
       upc: add.upc.trim(),
-      qty,
+      qty: unitsOnHand,
       reorder_at: parseInt(add.reorder_at) || 0,
     });
-    if (created && qty > 0 && price > 0) {
-      await addLog({ type: 'purchase', item_id: created.id, name, units: qty, unit_price: price, amount: +(qty * price).toFixed(2) });
+    if (created && packsOnHand > 0 && packPrice > 0) {
+      await addLog({ type: 'purchase', item_id: created.id, name, units: unitsOnHand, unit_price: price, amount: +(packsOnHand * packPrice).toFixed(2) });
     }
     await loadAll();
     setAdd(blankAdd);
     setLookupMsg(null);
     setTab('inventory');
-    showToast(`Added ${name}.`);
+    showToast(`Added ${name}${packSize > 1 ? ` — ${unitsOnHand} units on hand` : ''}.`);
   }
 
   /* ---- barcode use / unknown handoff ---- */
   function useByUpc(upc) {
     const v = String(upc).trim();
     const it = items.find(i => i.upc && i.upc === v);
-    if (it) { takeItem(it); return; }
+    if (it) { takeItem(it, 1); return; }
     showToast("Not in your supplies yet — let's add it.");
     setAdd({ ...blankAdd, upc: v });
     setTab('add');
@@ -203,13 +220,14 @@ export default function App() {
               <Empty title="Nothing here yet" body="Add your first supply from the Add tab — scan a barcode or type it in." />
             ) : (
               [...items].sort((a, b) => (isLow(b) - isLow(a)) || a.name.localeCompare(b.name)).map(it => (
-                <div key={it.id} className={'card' + (isLow(it) ? ' low' : '')} onClick={() => setEditing({ ...it, price: String(it.price), qty: String(it.qty), reorder_at: String(it.reorder_at) })}>
+                <div key={it.id} className={'card' + (isLow(it) ? ' low' : '')} onClick={() => setEditing({ ...it, packPrice: String(it.pack_price ?? it.price ?? ''), packSize: String(it.pack_size || 1), qty: String(it.qty), reorder_at: String(it.reorder_at) })}>
                   <div className="body">
                     <div className="name">{it.name} {isLow(it) && <span className="pill">Low</span>}</div>
                     <div className="meta">
                       <span><b>{it.vendor || '—'}</b></span>
                       {it.size && <span>{it.size}</span>}
-                      <span>{money(it.price)} each</span>
+                      <span>{money(it.price)}/unit</span>
+                      {it.pack_size > 1 && <span>{it.pack_size}-pack · {money(it.pack_price)}</span>}
                       <span>Reorder at {it.reorder_at}</span>
                     </div>
                   </div>
@@ -239,8 +257,13 @@ export default function App() {
             <div className="quick-label">Quick pick</div>
             {[...items].sort((a, b) => a.name.localeCompare(b.name)).map(it => (
               <div key={it.id} className="quick">
-                <div><div className="qn">{it.name}</div><div className="qm">{it.qty} on hand · {money(it.price)}{it.size ? ' · ' + it.size : ''}</div></div>
-                <button className="take" disabled={it.qty <= 0} style={it.qty <= 0 ? { opacity: .4 } : null} onClick={() => takeItem(it)}>&minus;</button>
+                <div><div className="qn">{it.name}</div><div className="qm">{it.qty} on hand · {money(it.price)}/unit{it.size ? ' · ' + it.size : ''}</div></div>
+                <div className="stepper">
+                  <button className="step-btn" disabled={it.qty <= 0} onClick={() => setTakeAmt(it.id, getTakeAmt(it.id) - 1)}>&minus;</button>
+                  <span className="step-n">{getTakeAmt(it.id)}</span>
+                  <button className="step-btn" disabled={it.qty <= 0} onClick={() => setTakeAmt(it.id, getTakeAmt(it.id) + 1)}>+</button>
+                  <button className="take" disabled={it.qty <= 0} style={it.qty <= 0 ? { opacity: .4 } : null} onClick={() => takeItem(it, getTakeAmt(it.id))}>Take</button>
+                </div>
               </div>
             ))}
           </section>
@@ -256,7 +279,7 @@ export default function App() {
                 <div key={it.id} className="buy">
                   <div className="top">
                     <div><div className="name">{it.name}{it.size ? ' · ' + it.size : ''}</div><div className="where">Buy at <b>{it.vendor || '—'}</b></div></div>
-                    <div className="nums"><div className="price">{money(it.price)}</div><div>last paid</div></div>
+                    <div className="nums"><div className="price">{it.pack_size > 1 ? money(it.pack_price) : money(it.price)}</div><div>{it.pack_size > 1 ? `pack of ${it.pack_size}` : 'last paid'}</div></div>
                   </div>
                   <div className="where" style={{ marginTop: 8 }}>{it.qty} on hand · reorder point {it.reorder_at}</div>
                 </div>
@@ -357,11 +380,18 @@ export default function App() {
               <div className="field"><label>Size</label><input placeholder="e.g. 32 oz" value={add.size} onChange={e => setAdd(a => ({ ...a, size: e.target.value }))} /></div>
               <div className="field"><label>Where you buy it</label><input placeholder="e.g. Costco" value={add.vendor} onChange={e => setAdd(a => ({ ...a, vendor: e.target.value }))} /></div>
               <div className="two">
-                <div className="field"><label>Price each</label><input inputMode="decimal" placeholder="14.50" value={add.price} onChange={e => setAdd(a => ({ ...a, price: e.target.value }))} /></div>
-                <div className="field"><label>On hand now</label><input inputMode="numeric" placeholder="6" value={add.qty} onChange={e => setAdd(a => ({ ...a, qty: e.target.value }))} /></div>
+                <div className="field"><label>Pack price</label><input inputMode="decimal" placeholder="e.g. 19.99" value={add.packPrice} onChange={e => setAdd(a => ({ ...a, packPrice: e.target.value }))} /></div>
+                <div className="field"><label>Units per pack</label><input inputMode="numeric" placeholder="1 if sold individually" value={add.packSize} onChange={e => setAdd(a => ({ ...a, packSize: e.target.value }))} /></div>
               </div>
-              <div className="field"><label>Reorder at</label><input inputMode="numeric" placeholder="3" value={add.reorder_at} onChange={e => setAdd(a => ({ ...a, reorder_at: e.target.value }))} /></div>
-              <div className="hint">Tap Look up to try auto-filling the name and size from the free product database. Cleaning supplies often aren't in there — if so, just type the details. Adding stock here counts as a purchase in your reports. Price is always what you paid.</div>
+              {(parseFloat(add.packPrice) > 0) && (
+                <div className="hint" style={{ marginTop: -8 }}>That's {money(unitPrice(add.packPrice, add.packSize))} per individual unit.</div>
+              )}
+              <div className="field"><label>Packs on hand now</label><input inputMode="numeric" placeholder="e.g. 1" value={add.qty} onChange={e => setAdd(a => ({ ...a, qty: e.target.value }))} /></div>
+              {(parseInt(add.qty) > 0 && parseInt(add.packSize) > 1) && (
+                <div className="hint" style={{ marginTop: -8 }}>That's {parseInt(add.qty) * Math.max(1, parseInt(add.packSize) || 1)} individual units on hand.</div>
+              )}
+              <div className="field"><label>Reorder at (individual units)</label><input inputMode="numeric" placeholder="3" value={add.reorder_at} onChange={e => setAdd(a => ({ ...a, reorder_at: e.target.value }))} /></div>
+              <div className="hint">Enter the price exactly as it rings up for the whole pack — an 8-pack of sponges might be $19.99 for 8 units. The app does the per-unit math for your reports, and Take pulls one sponge at a time, not one pack.</div>
               <button className="btn btn-sage" style={{ width: '100%', marginTop: 16 }} onClick={addNewItem}>Add to supply room</button>
             </div>
           </section>
@@ -384,9 +414,9 @@ export default function App() {
           <div>
             <h2>{editing.name}</h2>
             <div className="restock">
-              <button onClick={() => restock(items.find(i => i.id === editing.id), 1)}>Restock +1</button>
-              <button onClick={() => restock(items.find(i => i.id === editing.id), 5)}>+5</button>
-              <button onClick={() => restock(items.find(i => i.id === editing.id), 10)}>+10</button>
+              <button onClick={() => restock(items.find(i => i.id === editing.id), 1 * Math.max(1, parseInt(editing.packSize) || 1))}>+1 pack</button>
+              <button onClick={() => restock(items.find(i => i.id === editing.id), 5 * Math.max(1, parseInt(editing.packSize) || 1))}>+5 packs</button>
+              <button onClick={() => restock(items.find(i => i.id === editing.id), 1)}>+1 unit</button>
             </div>
             <div className="field"><label>Name</label><input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></div>
             <div className="two">
@@ -394,14 +424,18 @@ export default function App() {
               <div className="field"><label>Where you buy it</label><input value={editing.vendor || ''} onChange={e => setEditing({ ...editing, vendor: e.target.value })} /></div>
             </div>
             <div className="two">
-              <div className="field"><label>Price each</label><input inputMode="decimal" value={editing.price} onChange={e => setEditing({ ...editing, price: e.target.value })} /></div>
-              <div className="field"><label>On hand</label><input inputMode="numeric" value={editing.qty} onChange={e => setEditing({ ...editing, qty: e.target.value })} /></div>
+              <div className="field"><label>Pack price</label><input inputMode="decimal" value={editing.packPrice} onChange={e => setEditing({ ...editing, packPrice: e.target.value })} /></div>
+              <div className="field"><label>Units per pack</label><input inputMode="numeric" value={editing.packSize} onChange={e => setEditing({ ...editing, packSize: e.target.value })} /></div>
             </div>
+            {(parseFloat(editing.packPrice) > 0) && (
+              <div className="hint" style={{ marginTop: -8, marginBottom: 14 }}>That's {money(unitPrice(editing.packPrice, editing.packSize))} per individual unit.</div>
+            )}
             <div className="two">
+              <div className="field"><label>On hand (individual units)</label><input inputMode="numeric" value={editing.qty} onChange={e => setEditing({ ...editing, qty: e.target.value })} /></div>
               <div className="field"><label>Reorder at</label><input inputMode="numeric" value={editing.reorder_at} onChange={e => setEditing({ ...editing, reorder_at: e.target.value })} /></div>
-              <div className="field"><label>Barcode</label><input inputMode="numeric" value={editing.upc || ''} onChange={e => setEditing({ ...editing, upc: e.target.value })} /></div>
             </div>
-            <div className="hint">Restock buttons log a purchase at the current price. Editing the on-hand number is a count correction — it won't show as spending.</div>
+            <div className="field"><label>Barcode</label><input inputMode="numeric" value={editing.upc || ''} onChange={e => setEditing({ ...editing, upc: e.target.value })} /></div>
+            <div className="hint">"+1 pack" / "+5 packs" log a purchase at the pack price and add the right number of individual units. Editing "On hand" directly is a count correction — it won't show as spending.</div>
             <div className="sheet-actions">
               <button className="danger" onClick={() => removeItem(editing.id)}>Remove</button>
               <button className="btn btn-sage" onClick={saveEdit}>Save changes</button>
