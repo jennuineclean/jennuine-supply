@@ -80,6 +80,13 @@ main{flex:1;padding:6px 16px 96px;overflow-y:auto;}
 .buy .where b{color:var(--ink);font-weight:600;}
 .buy .nums{text-align:right;font-size:12px;color:var(--muted);white-space:nowrap;}
 .buy .nums .price{font-family:'Fraunces',serif;font-size:17px;font-weight:600;color:var(--ink);}
+.buy-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;}
+.mark-btn{flex:0 0 auto;background:var(--sage);color:#fff;border:none;border-radius:10px;padding:9px 14px;font-weight:600;font-size:12.5px;cursor:pointer;font-family:inherit;}
+.mark-btn:active{background:var(--sage-deep);}
+.mark-btn.undo{background:none;color:var(--muted);border:1px solid var(--line);}
+.mark-btn.undo:active{background:var(--mist);}
+.buy.ordered{border-left-color:var(--sage);opacity:.82;}
+.ordered-pill{background:var(--sage-soft);color:var(--sage-deep);}
 
 .form{background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:18px 17px;box-shadow:var(--shadow);margin-top:8px;}
 .field{margin-bottom:14px;}

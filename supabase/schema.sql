@@ -13,13 +13,15 @@ create table if not exists items (
   upc         text default '',
   qty         int default 0,             -- always in INDIVIDUAL units, not packs
   reorder_at  int default 0,
+  ordered     boolean default false,     -- true once you've placed the order; cleared automatically on restock
   created_at  timestamptz default now()
 );
 
--- If you already ran the original schema before pack pricing existed, run this
--- once to add the new columns without losing your data:
+-- If you already ran the original schema, run these once to add the newer columns
+-- without losing data:
 -- alter table items add column if not exists pack_price numeric(10,2) default 0;
 -- alter table items add column if not exists pack_size int default 1;
+-- alter table items add column if not exists ordered boolean default false;
 -- update items set pack_price = price, pack_size = 1 where pack_price = 0 and price > 0;
 
 create table if not exists supply_log (

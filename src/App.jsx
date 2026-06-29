@@ -70,11 +70,17 @@ export default function App() {
   }
 
   async function restock(it, packsOrUnits) {
-    await updateItem(it.id, { qty: it.qty + packsOrUnits });
+    await updateItem(it.id, { qty: it.qty + packsOrUnits, ordered: false });
     await addLog({ type: 'purchase', item_id: it.id, name: it.name, units: packsOrUnits, unit_price: it.price, amount: +(packsOrUnits * it.price).toFixed(2) });
     await loadAll();
     setEditing(e => (e && e.id === it.id ? { ...e, qty: it.qty + packsOrUnits } : e));
     showToast(`Restocked ${it.name} — ${it.qty + packsOrUnits} on hand.`);
+  }
+
+  async function setOrdered(it, ordered) {
+    await updateItem(it.id, { ordered });
+    await loadAll();
+    showToast(ordered ? `Marked ${it.name} as ordered.` : `${it.name} back on the to-order list.`);
   }
 
   async function saveEdit() {
@@ -172,6 +178,7 @@ export default function App() {
 
   /* ---- derived ---- */
   const low = useMemo(() => items.filter(isLow), [items]);
+  const toOrderCount = useMemo(() => items.filter(it => isLow(it) && !it.ordered).length, [items]);
   const invValue = useMemo(() => items.reduce((s, i) => s + i.qty * Number(i.price), 0), [items]);
   const months = useMemo(() => availableMonths(log), [log]);
   const curMonth = selectedMonth && months.includes(selectedMonth) ? selectedMonth : months[0];
@@ -270,22 +277,47 @@ export default function App() {
         )}
 
         {/* REORDER */}
-        {tab === 'reorder' && (
-          <section className="view">
-            <div className="section-eyebrow">Time to reorder</div>
-            {low.length === 0
-              ? <Empty title="All stocked up" body="Nothing has dropped to its reorder point. This list fills itself as you take items." />
-              : low.map(it => (
-                <div key={it.id} className="buy">
-                  <div className="top">
-                    <div><div className="name">{it.name}{it.size ? ' · ' + it.size : ''}</div><div className="where">Buy at <b>{it.vendor || '—'}</b></div></div>
-                    <div className="nums"><div className="price">{it.pack_size > 1 ? money(it.pack_price) : money(it.price)}</div><div>{it.pack_size > 1 ? `pack of ${it.pack_size}` : 'last paid'}</div></div>
+        {tab === 'reorder' && (() => {
+          const toOrder = low.filter(it => !it.ordered);
+          const onWay = low.filter(it => it.ordered);
+          return (
+            <section className="view">
+              <div className="section-eyebrow">Needs ordering</div>
+              {toOrder.length === 0
+                ? <Empty title={onWay.length ? "Nothing left to order" : "All stocked up"} body={onWay.length ? "Everything that's low is already on its way." : "Nothing has dropped to its reorder point. This list fills itself as you take items."} />
+                : toOrder.map(it => (
+                  <div key={it.id} className="buy">
+                    <div className="top">
+                      <div><div className="name">{it.name}{it.size ? ' · ' + it.size : ''}</div><div className="where">Buy at <b>{it.vendor || '—'}</b></div></div>
+                      <div className="nums"><div className="price">{it.pack_size > 1 ? money(it.pack_price) : money(it.price)}</div><div>{it.pack_size > 1 ? `pack of ${it.pack_size}` : 'last paid'}</div></div>
+                    </div>
+                    <div className="buy-foot">
+                      <span className="where">{it.qty} on hand · reorder point {it.reorder_at}</span>
+                      <button className="mark-btn" onClick={() => setOrdered(it, true)}>Mark ordered</button>
+                    </div>
                   </div>
-                  <div className="where" style={{ marginTop: 8 }}>{it.qty} on hand · reorder point {it.reorder_at}</div>
-                </div>
-              ))}
-          </section>
-        )}
+                ))}
+
+              {onWay.length > 0 && (
+                <>
+                  <div className="section-eyebrow" style={{ marginTop: 22 }}>On the way</div>
+                  {onWay.map(it => (
+                    <div key={it.id} className="buy ordered">
+                      <div className="top">
+                        <div><div className="name">{it.name}{it.size ? ' · ' + it.size : ''} <span className="pill ordered-pill">Ordered</span></div><div className="where">From <b>{it.vendor || '—'}</b></div></div>
+                        <div className="nums"><div className="price">{it.pack_size > 1 ? money(it.pack_price) : money(it.price)}</div><div>{it.pack_size > 1 ? `pack of ${it.pack_size}` : 'last paid'}</div></div>
+                      </div>
+                      <div className="buy-foot">
+                        <span className="where">{it.qty} on hand · restock to clear</span>
+                        <button className="mark-btn undo" onClick={() => setOrdered(it, false)}>Undo</button>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </section>
+          );
+        })()}
 
         {/* REPORTS */}
         {tab === 'reports' && (
@@ -401,7 +433,7 @@ export default function App() {
       <nav>
         <Tab id="inventory" cur={tab} go={goTab} label="Supplies" icon={<path d="M3 7l9-4 9 4v10l-9 4-9-4V7z M3 7l9 4 9-4M12 11v10" />} />
         <Tab id="use" cur={tab} go={goTab} label="Take" icon={<path d="M3 5v14M7 5v14M11 5v14M15 5v14M19 5v14" />} />
-        <Tab id="reorder" cur={tab} go={goTab} label="Reorder" badge={low.length} icon={<><path d="M6 6h15l-1.5 9h-12z" /><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M6 6L5 3H3" /></>} />
+        <Tab id="reorder" cur={tab} go={goTab} label="Reorder" badge={toOrderCount} icon={<><path d="M6 6h15l-1.5 9h-12z" /><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M6 6L5 3H3" /></>} />
         <Tab id="reports" cur={tab} go={goTab} label="Reports" icon={<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />} />
         <Tab id="add" cur={tab} go={goTab} label="Add" icon={<><circle cx="12" cy="12" r="9" /><path d="M12 8v8M8 12h8" /></>} />
       </nav>
